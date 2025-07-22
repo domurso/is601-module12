@@ -5,11 +5,15 @@ from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field, field_validator
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from typing import Optional
+import uuid
+from datetime import datetime
 import uvicorn
 import logging
 from app.operations import add, subtract, multiply, divide
 from app.models.user import User
+from app.models.calculations import Calculation
 from app.auth.dependencies import get_current_active_user, UserResponse
 from app.database import SessionLocal
 
@@ -68,7 +72,33 @@ class Token(BaseModel):
     token_type: str = Field(..., description="Token type, e.g., bearer")
     user: UserResponse = Field(..., description="User details")
 
-# Custom Exception Handlers (existing)
+# Pydantic schemas for calculation
+class CalculationCreate(BaseModel):
+    a: float = Field(..., description="The first number")
+    b: float = Field(..., description="The second number")
+    type: str = Field(..., description="Operation type: add, subtract, multiply, divide")
+
+    @field_validator('type')
+    def validate_type(cls, value):
+        valid_types = ['add', 'subtract', 'multiply', 'divide']
+        if value not in valid_types:
+            raise ValueError(f"Type must be one of {valid_types}")
+        return value
+
+class CalculationRead(BaseModel):
+    id: uuid.UUID
+    user_id: uuid.UUID
+    a: float
+    b: float
+    type: str
+    result: Optional[float]
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True  # Updated for SQLAlchemy 2.0 compatibility
+
+# Custom Exception Handlers
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     logger.error(f"HTTPException on {request.url.path}: {exc.detail}")
@@ -84,6 +114,22 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     return JSONResponse(
         status_code=400,
         content={"error": error_messages},
+    )
+
+@app.exception_handler(OperationalError)
+async def operational_exception_handler(request: Request, exc: OperationalError):
+    logger.error(f"Database OperationalError on {request.url.path}: {str(exc)}")
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Database connection error, please ensure the database is initialized"},
+    )
+
+@app.exception_handler(ProgrammingError)
+async def programming_exception_handler(request: Request, exc: ProgrammingError):
+    logger.error(f"Database ProgrammingError on {request.url.path}: {str(exc)}")
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Database table not found, please initialize the database"},
     )
 
 # Existing Root Endpoint
@@ -146,6 +192,14 @@ async def divide_route(operation: OperationRequest):
         logger.error(f"Divide Operation Internal Error: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
+# Test Endpoint to Verify Swagger Rendering
+@app.post("/test-register", response_model=UserCreate)
+async def test_register(user_data: UserCreate):
+    """
+    Test endpoint to verify UserCreate schema rendering.
+    """
+    return user_data
+
 # User Endpoints
 @app.post("/users/register", response_model=UserResponse, responses={400: {"model": ErrorResponse}})
 async def register_user(user_data: UserCreate, db: Session = Depends(get_db)):
@@ -178,6 +232,13 @@ async def register_user(user_data: UserCreate, db: Session = Depends(get_db)):
 async def login_user(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     """
     Authenticate user and return JWT token.
+
+    Form Data:
+    - **username**: Username or email
+    - **password**: Password
+
+    Returns:
+    - JWT token and user details
     """
     token_data = User.authenticate(db, form_data.username, form_data.password)
     if not token_data:
@@ -189,6 +250,165 @@ async def login_user(form_data: OAuth2PasswordRequestForm = Depends(), db: Sessi
         )
     logger.info(f"User logged in: {form_data.username}")
     return token_data
+
+# Calculation Endpoints (BREAD)
+@app.get("/calculations", response_model=list[CalculationRead], responses={401: {"model": ErrorResponse}})
+async def browse_calculations(
+    current_user: UserResponse = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    List all calculations for the authenticated user.
+
+    Returns:
+    - List of calculations associated with the user
+
+    Raises:
+    - 401: If user is not authenticated
+    """
+    calculations = db.query(Calculation).filter(Calculation.user_id == current_user.id).all()
+    logger.info(f"User {current_user.email} browsed calculations")
+    return calculations
+
+@app.get("/calculations/{id}", response_model=CalculationRead, responses={401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}})
+async def read_calculation(
+    id: uuid.UUID,
+    current_user: UserResponse = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Retrieve a specific calculation by ID.
+
+    Parameters:
+    - **id**: UUID of the calculation
+
+    Returns:
+    - Calculation details
+
+    Raises:
+    - 401: If user is not authenticated
+    - 404: If calculation is not found or doesn't belong to the user
+    """
+    calculation = db.query(Calculation).filter(
+        Calculation.id == id,
+        Calculation.user_id == current_user.id
+    ).first()
+    if not calculation:
+        logger.error(f"Calculation {id} not found for user {current_user.email}")
+        raise HTTPException(status_code=404, detail="Calculation not found")
+    logger.info(f"User {current_user.email} retrieved calculation {id}")
+    return calculation
+
+@app.put("/calculations/{id}", response_model=CalculationRead, responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}})
+async def edit_calculation(
+    id: uuid.UUID,
+    calc_data: CalculationCreate,
+    current_user: UserResponse = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Update a calculation by ID.
+
+    Parameters:
+    - **id**: UUID of the calculation
+    - **calc_data**: JSON body with updated calculation details
+        - **a**: First number
+        - **b**: Second number
+        - **type**: Operation type (add, subtract, multiply, divide)
+
+    Returns:
+    - Updated calculation details
+
+    Raises:
+    - 400: If input is invalid (e.g., invalid operation type)
+    - 401: If user is not authenticated
+    - 404: If calculation is not found or doesn't belong to the user
+    """
+    calculation = db.query(Calculation).filter(
+        Calculation.id == id,
+        Calculation.user_id == current_user.id
+    ).first()
+    if not calculation:
+        logger.error(f"Calculation {id} not found for user {current_user.email}")
+        raise HTTPException(status_code=404, detail="Calculation not found")
+    
+    calculation.a = calc_data.a
+    calculation.b = calc_data.b
+    calculation.type = calc_data.type
+    try:
+        calculation.perform_calculation()
+        db.commit()
+        db.refresh(calculation)
+        logger.info(f"User {current_user.email} updated calculation {id}")
+        return calculation
+    except ValueError as e:
+        logger.error(f"Calculation Update Error for {id}: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/calculations", response_model=CalculationRead, responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}})
+async def add_calculation(
+    calc_data: CalculationCreate,
+    current_user: UserResponse = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Create a new calculation.
+
+    Request Body:
+    - **a**: First number
+    - **b**: Second number
+    - **type**: Operation type (add, subtract, multiply, divide)
+
+    Returns:
+    - Created calculation details
+
+    Raises:
+    - 400: If input is invalid (e.g., invalid operation type)
+    - 401: If user is not authenticated
+    """
+    try:
+        calculation = Calculation.create_calculation(
+            db=db,
+            user_id=current_user.id,
+            a=calc_data.a,
+            b=calc_data.b,
+            calc_type=calc_data.type
+        )
+        db.commit()
+        db.refresh(calculation)
+        logger.info(f"User {current_user.email} created calculation {calculation.id}")
+        return calculation
+    except ValueError as e:
+        logger.error(f"Calculation Creation Error: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.delete("/calculations/{id}", status_code=status.HTTP_204_NO_CONTENT, responses={401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}})
+async def delete_calculation(
+    id: uuid.UUID,
+    current_user: UserResponse = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Delete a calculation by ID.
+
+    Parameters:
+    - **id**: UUID of the calculation
+
+    Raises:
+    - 401: If user is not authenticated
+    - 404: If calculation is not found or doesn't belong to the user
+    """
+    calculation = db.query(Calculation).filter(
+        Calculation.id == id,
+        Calculation.user_id == current_user.id
+    ).first()
+    if not calculation:
+        logger.error(f"Calculation {id} not found for user {current_user.email}")
+        raise HTTPException(status_code=404, detail="Calculation not found")
+    
+    db.delete(calculation)
+    db.commit()
+    logger.info(f"User {current_user.email} deleted calculation {id}")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8000)
