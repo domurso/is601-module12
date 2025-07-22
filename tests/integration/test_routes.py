@@ -5,7 +5,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.pool import StaticPool
 from fastapi import status
-from app.main import app
+from main import app
 from app.models.user import User
 from app.models.calculation import Calculation
 from app.database import SessionLocal
