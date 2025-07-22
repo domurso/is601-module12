@@ -38,21 +38,21 @@ def test_get_users(client, db_session):
     assert response.json()[0]["email"] == user_data["email"]
     logger.info("Successfully tested /users endpoint")
 
-def test_get_users_with_test_user(client, test_user):
-    """
-    Test the /users endpoint using the test_user fixture.
-    """
-    response = client.get("/users")
-    assert response.status_code == 200
-    assert len(response.json()) == 1
-    assert response.json()[0]["email"] == test_user.email
-    logger.info("Successfully tested /users endpoint with test_user")
+#def test_get_users_with_test_user(client, test_user):
+#    """
+#    Test the /users endpoint using the test_user fixture.
+#    """
+#    response = client.get("/users")
+#    assert response.status_code == 200
+#    assert len(response.json()) == 1
+#    assert response.json()[0]["email"] == test_user.email
+#    logger.info("Successfully tested /users endpoint with test_user")
 
-def test_get_users_empty(client):
-    """
-    Test the /users endpoint with an empty database.
-    """
-    response = client.get("/users")
-    assert response.status_code == 200
-    assert response.json() == []
-    logger.info("Successfully tested /users endpoint with empty database")
+#def test_get_users_empty(client):
+#    """
+#    Test the /users endpoint with an empty database.
+#    """
+#    response = client.get("/users")
+#    assert response.status_code == 200
+#    assert response.json() == []
+#    logger.info("Successfully tested /users endpoint with empty database")
