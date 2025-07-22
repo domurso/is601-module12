@@ -11,7 +11,7 @@ import logging
 from app.operations import add, subtract, multiply, divide
 from app.models.user import User
 from app.auth.dependencies import get_current_active_user, UserResponse
-from app.database import SessionLocal  # Assume a database session factory
+from app.database import SessionLocal
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -51,11 +51,11 @@ class ErrorResponse(BaseModel):
 
 # Pydantic schemas for user
 class UserCreate(BaseModel):
-    first_name: str = Field(..., max_length=50)
-    last_name: str = Field(..., max_length=50)
-    email: str = Field(..., max_length=120)
-    username: str = Field(..., max_length=50)
-    password: str = Field(..., min_length=6)
+    first_name: str = Field(..., max_length=50, description="User's first name (max 50 characters)")
+    last_name: str = Field(..., max_length=50, description="User's last name (max 50 characters)")
+    email: str = Field(..., max_length=120, description="User's email address (max 120 characters)")
+    username: str = Field(..., max_length=50, description="Unique username (max 50 characters)")
+    password: str = Field(..., min_length=6, description="Password (minimum 6 characters)")
 
     @field_validator('email')
     def validate_email(cls, value):
@@ -64,9 +64,9 @@ class UserCreate(BaseModel):
         return value
 
 class Token(BaseModel):
-    access_token: str
-    token_type: str
-    user: UserResponse
+    access_token: str = Field(..., description="JWT access token")
+    token_type: str = Field(..., description="Token type, e.g., bearer")
+    user: UserResponse = Field(..., description="User details")
 
 # Custom Exception Handlers (existing)
 @app.exception_handler(HTTPException)
@@ -150,7 +150,20 @@ async def divide_route(operation: OperationRequest):
 @app.post("/users/register", response_model=UserResponse, responses={400: {"model": ErrorResponse}})
 async def register_user(user_data: UserCreate, db: Session = Depends(get_db)):
     """
-    Register a new user.
+    Register a new user with the provided details.
+
+    Request Body:
+    - **first_name**: User's first name (max 50 characters)
+    - **last_name**: User's last name (max 50 characters)
+    - **email**: User's email address (max 120 characters, must include '@')
+    - **username**: Unique username (max 50 characters)
+    - **password**: Password (minimum 6 characters)
+
+    Returns:
+    - User details on successful registration
+
+    Raises:
+    - 400: If username or email already exists or input is invalid
     """
     try:
         user = User.register(db, user_data.dict())
