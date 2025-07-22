@@ -201,6 +201,12 @@ async def test_register(user_data: UserCreate):
     return user_data
 
 # User Endpoints
+
+@app.get("/users")
+def get_users(db: Session = Depends(get_db)):
+    return db.query(User).all()
+
+
 @app.post("/users/register", response_model=UserResponse, responses={400: {"model": ErrorResponse}})
 async def register_user(user_data: UserCreate, db: Session = Depends(get_db)):
     """
