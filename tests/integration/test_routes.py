@@ -6,6 +6,7 @@ from fastapi import status
 from main import app, get_db
 from app.models.user import User
 from app.models.calculations import Calculation
+from app.auth.dependencies import get_current_user
 import uuid
 import logging
 
@@ -13,15 +14,21 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Override get_db dependency
+# Override get_db and get_current_user dependencies
 def override_get_db(db_session: Session):
     def _get_db():
         yield db_session
     return _get_db
 
+def override_get_current_user(db_session: Session):
+    def _get_current_user(token: str):
+        return get_current_user(db_session, token)
+    return _get_current_user
+
 @pytest_asyncio.fixture
 async def client(db_session: Session):
     app.dependency_overrides[get_db] = override_get_db(db_session)
+    app.dependency_overrides[get_current_user] = override_get_current_user(db_session)
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -142,7 +149,7 @@ async def test_create_calculation_unauthorized(client: TestClient):
         json={"a": 10, "b": 5, "type": "add"}
     )
     assert response.status_code == 401
-    assert response.json() == {"error": "Not authenticated"}
+    assert response.json() == {"error": "Could not validate credentials"}
     logger.info("Tested unauthorized calculation creation")
 
 @pytest.mark.asyncio
