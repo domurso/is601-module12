@@ -6,6 +6,7 @@ from fastapi import status
 from main import app, get_db
 from app.models.user import User
 from app.models.calculations import Calculation
+from app.schemas.user import UserResponse
 from app.auth.dependencies import get_current_user
 import uuid
 import logging
@@ -22,7 +23,21 @@ def override_get_db(db_session: Session):
 
 def override_get_current_user(db_session: Session):
     def _get_current_user(token: str):
-        return get_current_user(db_session, token)
+        user_id = User.verify_token(token)
+        if user_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Could not validate credentials",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        user = db_session.query(User).filter(User.id == user_id).first()
+        if user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Could not validate credentials",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return UserResponse.model_validate(user)
     return _get_current_user
 
 @pytest_asyncio.fixture
