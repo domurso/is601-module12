@@ -1,67 +1,39 @@
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.orm import Session
 from fastapi import status
-from main import app  # Import from root directory
+from main import app, get_db  # Import from root directory
 from app.models.user import User
 from app.models.calculations import Calculation
-from app.database import SessionLocal
 import uuid
 from datetime import datetime
 from app.auth.dependencies import UserResponse
 
-# Use in-memory SQLite for testing
-SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL,
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool
-)
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
-
 # Override the get_db dependency for testing
-def override_get_db():
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-app.dependency_overrides[app.get_db] = override_get_db
+def override_get_db(db_session: Session):
+    def _get_db():
+        try:
+            yield db_session
+        finally:
+            pass  # db_session is managed by conftest.py
+    return _get_db
 
 @pytest_asyncio.fixture
-async def client():
-    # Create tables
-    Base.metadata.create_all(bind=engine)
+async def client(db_session: Session):
+    app.dependency_overrides[get_db] = override_get_db(db_session)
     yield TestClient(app)
-    # Drop tables after tests
-    Base.metadata.drop_all(bind=engine)
+    app.dependency_overrides.clear()
 
 @pytest_asyncio.fixture
-async def test_db():
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-@pytest_asyncio.fixture
-async def test_user(test_db: Session):
-    user_data = {
-        "first_name": "Test",
-        "last_name": "User",
-        "email": "test@example.com",
-        "username": "testuser",
-        "password": User.hash_password("securepassword123")
-    }
+async def test_user(db_session: Session, create_fake_user):
+    user_data = create_fake_user
+    user_data["password"] = User.hash_password(user_data["password"])
     user = User(**user_data)
-    test_db.add(user)
-    test_db.commit()
-    test_db.refresh(user)
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    logger.info(f"Created test user: {user.email}")
     return user
 
 @pytest_asyncio.fixture
@@ -71,71 +43,66 @@ async def test_token(test_user: User):
     return token
 
 @pytest.mark.asyncio
-async def test_register_user(client: TestClient):
+async def test_register_user(client: TestClient, create_fake_user):
+    user_data = create_fake_user
     response = client.post(
         "/users/register",
-        json={
-            "first_name": "John",
-            "last_name": "Doe",
-            "email": "john@example.com",
-            "username": "johndoe",
-            "password": "securepassword123"
-        }
+        json=user_data
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["email"] == "john@example.com"
-    assert data["username"] == "johndoe"
+    assert data["email"] == user_data["email"]
+    assert data["username"] == user_data["username"]
     assert data["is_active"] is True
     assert data["is_verified"] is False
+    logger.info(f"Successfully tested user registration: {user_data['email']}")
 
 @pytest.mark.asyncio
-async def test_register_user_duplicate_email(client: TestClient):
+async def test_register_user_duplicate_email(client: TestClient, create_fake_user):
     # Register first user
-    client.post(
-        "/users/register",
-        json={
-            "first_name": "John",
-            "last_name": "Doe",
-            "email": "john@example.com",
-            "username": "johndoe",
-            "password": "securepassword123"
-        }
-    )
+    user_data = create_fake_user
+    client.post("/users/register", json=user_data)
+    
     # Try registering with same email
-    response = client.post(
-        "/users/register",
-        json={
-            "first_name": "Jane",
-            "last_name": "Doe",
-            "email": "john@example.com",
-            "username": "janedoe",
-            "password": "securepassword123"
-        }
-    )
+    duplicate_data = create_fake_user
+    duplicate_data["email"] = user_data["email"]  # Force duplicate email
+    duplicate_data["username"] = f"{duplicate_data['username']}2"
+    response = client.post("/users/register", json=duplicate_data)
     assert response.status_code == 400
     assert response.json() == {"error": "Username or email already exists"}
+    logger.info("Successfully tested duplicate email registration")
 
 @pytest.mark.asyncio
 async def test_login_user(client: TestClient, test_user: User):
     response = client.post(
         "/users/login",
-        data={"username": "testuser", "password": "securepassword123"}
+        data={"username": test_user.username, "password": "securepassword123"}
     )
     assert response.status_code == 200
     data = response.json()
     assert data["token_type"] == "bearer"
     assert "access_token" in data
-    assert data["user"]["email"] == "test@example.com"
+    assert data["user"]["email"] == test_user.email
+    logger.info(f"Successfully tested login for user: {test_user.email}")
 
 @pytest.mark.asyncio
 async def test_login_invalid_credentials(client: TestClient, test_user: User):
     response = client.post(
         "/users/login",
-        data={"username": "testuser", "password": "wrongpassword"}
+        data={"username": test_user.username, "password": "wrongpassword"}
     )
     assert response.status_code == 401
     assert response.json() == {"error": "Incorrect username or password"}
+    logger.info("Successfully tested invalid login credentials")
+
+@pytest.mark.asyncio
+async def test_get_users(client: TestClient, test_user: User):
+    response = client.get("/users")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) >= 1
+    assert any(user["email"] == test_user.email for user in data)
+    logger.info("Successfully tested get users endpoint")
 
 @pytest.mark.asyncio
 async def test_add_calculation(client: TestClient, test_token: str, test_db: Session):
@@ -152,6 +119,7 @@ async def test_add_calculation(client: TestClient, test_token: str, test_db: Ses
     assert data["result"] == 15
     assert "id" in data
     assert "user_id" in data
+    logger.info("Successfully tested add calculation")
 
 @pytest.mark.asyncio
 async def test_add_calculation_unauthorized(client: TestClient):
@@ -161,6 +129,7 @@ async def test_add_calculation_unauthorized(client: TestClient):
     )
     assert response.status_code == 401
     assert response.json() == {"error": "Could not validate credentials"}
+    logger.info("Successfully tested unauthorized add calculation")
 
 @pytest.mark.asyncio
 async def test_add_calculation_invalid_type(client: TestClient, test_token: str):
@@ -171,6 +140,7 @@ async def test_add_calculation_invalid_type(client: TestClient, test_token: str)
     )
     assert response.status_code == 400
     assert response.json() == {"error": "Invalid calculation type: invalid"}
+    logger.info("Successfully tested invalid calculation type")
 
 @pytest.mark.asyncio
 async def test_browse_calculations(client: TestClient, test_token: str, test_db: Session, test_user: User):
@@ -196,6 +166,7 @@ async def test_browse_calculations(client: TestClient, test_token: str, test_db:
     assert len(data) == 1
     assert data[0]["a"] == 10
     assert data[0]["result"] == 15
+    logger.info("Successfully tested browse calculations")
 
 @pytest.mark.asyncio
 async def test_read_calculation(client: TestClient, test_token: str, test_db: Session, test_user: User):
@@ -222,6 +193,7 @@ async def test_read_calculation(client: TestClient, test_token: str, test_db: Se
     assert data["id"] == str(calc.id)
     assert data["a"] == 20
     assert data["result"] == 80
+    logger.info("Successfully tested read calculation")
 
 @pytest.mark.asyncio
 async def test_read_calculation_not_found(client: TestClient, test_token: str):
@@ -231,6 +203,7 @@ async def test_read_calculation_not_found(client: TestClient, test_token: str):
     )
     assert response.status_code == 404
     assert response.json() == {"error": "Calculation not found"}
+    logger.info("Successfully tested read calculation not found")
 
 @pytest.mark.asyncio
 async def test_update_calculation(client: TestClient, test_token: str, test_db: Session, test_user: User):
@@ -259,6 +232,7 @@ async def test_update_calculation(client: TestClient, test_token: str, test_db: 
     assert data["b"] == 4
     assert data["type"] == "multiply"
     assert data["result"] == 80
+    logger.info("Successfully tested update calculation")
 
 @pytest.mark.asyncio
 async def test_update_calculation_not_found(client: TestClient, test_token: str):
@@ -269,6 +243,7 @@ async def test_update_calculation_not_found(client: TestClient, test_token: str)
     )
     assert response.status_code == 404
     assert response.json() == {"error": "Calculation not found"}
+    logger.info("Successfully tested update calculation not found")
 
 @pytest.mark.asyncio
 async def test_delete_calculation(client: TestClient, test_token: str, test_db: Session, test_user: User):
@@ -295,6 +270,7 @@ async def test_delete_calculation(client: TestClient, test_token: str, test_db: 
     # Verify deletion
     calc = test_db.query(Calculation).filter(Calculation.id == calc.id).first()
     assert calc is None
+    logger.info("Successfully tested delete calculation")
 
 @pytest.mark.asyncio
 async def test_delete_calculation_not_found(client: TestClient, test_token: str):
@@ -304,3 +280,4 @@ async def test_delete_calculation_not_found(client: TestClient, test_token: str)
     )
     assert response.status_code == 404
     assert response.json() == {"error": "Calculation not found"}
+    logger.info("Successfully tested delete calculation not found")
