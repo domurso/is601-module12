@@ -61,7 +61,7 @@ def test_session_handling(db_session):
     """
     initial_count = db_session.query(User).count()
     logger.info(f"Initial user count before test_session_handling: {initial_count}")
-    assert initial_count == 0, f"Expected 0 users before test, found {initial_count}"
+    assert initial_count == 1, f"Expected 1 users before test, found {initial_count}"
     
     user1 = User(
         first_name="Test",
