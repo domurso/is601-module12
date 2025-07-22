@@ -3,7 +3,7 @@ import pytest_asyncio
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 from fastapi import status
-from main import app, get_db  # Import from root directory
+from main import app, get_db
 from app.models.user import User
 from app.models.calculations import Calculation
 import uuid
@@ -17,10 +17,7 @@ logger = logging.getLogger(__name__)
 # Override the get_db dependency for testing
 def override_get_db(db_session: Session):
     def _get_db():
-        try:
-            yield db_session
-        finally:
-            pass  # db_session is managed by conftest.py
+        yield db_session
     return _get_db
 
 @pytest_asyncio.fixture
@@ -32,9 +29,7 @@ async def client(db_session: Session):
 @pytest_asyncio.fixture
 async def test_user(db_session: Session, fake_user_data):
     user_data = fake_user_data
-    user_data["password"] = User.hash_password(user_data["password"])
-    user = User(**user_data)
-    db_session.add(user)
+    user = User.register(db_session, user_data)
     db_session.commit()
     db_session.refresh(user)
     logger.info(f"Created test user: {user.email}")
@@ -77,10 +72,10 @@ async def test_register_user_duplicate_email(client: TestClient, fake_user_data)
     logger.info("Successfully tested duplicate email registration")
 
 @pytest.mark.asyncio
-async def test_login_user(client: TestClient, test_user: User):
+async def test_login_user(client: TestClient, test_user: User, fake_user_data):
     response = client.post(
         "/users/login",
-        data={"username": test_user.username, "password": "securepassword123"}
+        data={"username": test_user.username, "password": fake_user_data["password"]}
     )
     assert response.status_code == 200
     data = response.json()
@@ -142,23 +137,20 @@ async def test_add_calculation_invalid_type(client: TestClient, test_token: str)
         json={"a": 10, "b": 5, "type": "invalid"},
         headers={"Authorization": f"Bearer {test_token}"}
     )
-    assert response.status_code == 400
-    assert response.json() == {"error": "Invalid calculation type: invalid"}
+    assert response.status_code == 422
+    assert "type: Value error, Type must be one of ['add', 'subtract', 'multiply', 'divide']" in response.json()["detail"][0]["msg"]
     logger.info("Successfully tested invalid calculation type")
 
 @pytest.mark.asyncio
 async def test_browse_calculations(client: TestClient, test_token: str, db_session: Session, test_user: User):
     # Add a calculation
-    calc = Calculation(
+    calc = Calculation.create_calculation(
+        db=db_session,
         user_id=test_user.id,
         a=10,
         b=5,
-        type="add",
-        result=15,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow()
+        calc_type="add"
     )
-    db_session.add(calc)
     db_session.commit()
     
     response = client.get(
@@ -175,17 +167,13 @@ async def test_browse_calculations(client: TestClient, test_token: str, db_sessi
 @pytest.mark.asyncio
 async def test_read_calculation(client: TestClient, test_token: str, db_session: Session, test_user: User):
     # Add a calculation
-    calc = Calculation(
-        id=uuid.uuid4(),
+    calc = Calculation.create_calculation(
+        db=db_session,
         user_id=test_user.id,
         a=20,
         b=4,
-        type="multiply",
-        result=80,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow()
+        calc_type="multiply"
     )
-    db_session.add(calc)
     db_session.commit()
     
     response = client.get(
@@ -212,17 +200,13 @@ async def test_read_calculation_not_found(client: TestClient, test_token: str):
 @pytest.mark.asyncio
 async def test_update_calculation(client: TestClient, test_token: str, db_session: Session, test_user: User):
     # Add a calculation
-    calc = Calculation(
-        id=uuid.uuid4(),
+    calc = Calculation.create_calculation(
+        db=db_session,
         user_id=test_user.id,
         a=10,
         b=5,
-        type="add",
-        result=15,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow()
+        calc_type="add"
     )
-    db_session.add(calc)
     db_session.commit()
     
     response = client.put(
@@ -252,17 +236,13 @@ async def test_update_calculation_not_found(client: TestClient, test_token: str)
 @pytest.mark.asyncio
 async def test_delete_calculation(client: TestClient, test_token: str, db_session: Session, test_user: User):
     # Add a calculation
-    calc = Calculation(
-        id=uuid.uuid4(),
+    calc = Calculation.create_calculation(
+        db=db_session,
         user_id=test_user.id,
         a=10,
         b=5,
-        type="add",
-        result=15,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow()
+        calc_type="add"
     )
-    db_session.add(calc)
     db_session.commit()
     
     response = client.delete(
