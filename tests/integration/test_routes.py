@@ -7,7 +7,7 @@ from sqlalchemy.pool import StaticPool
 from fastapi import status
 from main import app
 from app.models.user import User
-from app.models.calculation import Calculation
+from app.models.calculations import Calculation
 from app.database import SessionLocal
 import uuid
 from datetime import datetime
