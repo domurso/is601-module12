@@ -8,7 +8,11 @@ from app.models.user import User
 from app.models.calculations import Calculation
 import uuid
 from datetime import datetime
-from app.auth.dependencies import UserResponse
+import logging
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Override the get_db dependency for testing
 def override_get_db(db_session: Session):
@@ -26,8 +30,8 @@ async def client(db_session: Session):
     app.dependency_overrides.clear()
 
 @pytest_asyncio.fixture
-async def test_user(db_session: Session, create_fake_user):
-    user_data = create_fake_user
+async def test_user(db_session: Session, fake_user_data):
+    user_data = fake_user_data
     user_data["password"] = User.hash_password(user_data["password"])
     user = User(**user_data)
     db_session.add(user)
@@ -43,8 +47,8 @@ async def test_token(test_user: User):
     return token
 
 @pytest.mark.asyncio
-async def test_register_user(client: TestClient, create_fake_user):
-    user_data = create_fake_user
+async def test_register_user(client: TestClient, fake_user_data):
+    user_data = fake_user_data
     response = client.post(
         "/users/register",
         json=user_data
@@ -58,13 +62,13 @@ async def test_register_user(client: TestClient, create_fake_user):
     logger.info(f"Successfully tested user registration: {user_data['email']}")
 
 @pytest.mark.asyncio
-async def test_register_user_duplicate_email(client: TestClient, create_fake_user):
+async def test_register_user_duplicate_email(client: TestClient, fake_user_data):
     # Register first user
-    user_data = create_fake_user
+    user_data = fake_user_data
     client.post("/users/register", json=user_data)
     
     # Try registering with same email
-    duplicate_data = create_fake_user
+    duplicate_data = fake_user_data
     duplicate_data["email"] = user_data["email"]  # Force duplicate email
     duplicate_data["username"] = f"{duplicate_data['username']}2"
     response = client.post("/users/register", json=duplicate_data)
@@ -105,7 +109,7 @@ async def test_get_users(client: TestClient, test_user: User):
     logger.info("Successfully tested get users endpoint")
 
 @pytest.mark.asyncio
-async def test_add_calculation(client: TestClient, test_token: str, test_db: Session):
+async def test_add_calculation(client: TestClient, test_token: str, db_session: Session):
     response = client.post(
         "/calculations",
         json={"a": 10, "b": 5, "type": "add"},
@@ -128,7 +132,7 @@ async def test_add_calculation_unauthorized(client: TestClient):
         json={"a": 10, "b": 5, "type": "add"}
     )
     assert response.status_code == 401
-    assert response.json() == {"error": "Could not validate credentials"}
+    assert response.json() == {"error": "Not authenticated"}
     logger.info("Successfully tested unauthorized add calculation")
 
 @pytest.mark.asyncio
@@ -143,7 +147,7 @@ async def test_add_calculation_invalid_type(client: TestClient, test_token: str)
     logger.info("Successfully tested invalid calculation type")
 
 @pytest.mark.asyncio
-async def test_browse_calculations(client: TestClient, test_token: str, test_db: Session, test_user: User):
+async def test_browse_calculations(client: TestClient, test_token: str, db_session: Session, test_user: User):
     # Add a calculation
     calc = Calculation(
         user_id=test_user.id,
@@ -154,8 +158,8 @@ async def test_browse_calculations(client: TestClient, test_token: str, test_db:
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow()
     )
-    test_db.add(calc)
-    test_db.commit()
+    db_session.add(calc)
+    db_session.commit()
     
     response = client.get(
         "/calculations",
@@ -169,7 +173,7 @@ async def test_browse_calculations(client: TestClient, test_token: str, test_db:
     logger.info("Successfully tested browse calculations")
 
 @pytest.mark.asyncio
-async def test_read_calculation(client: TestClient, test_token: str, test_db: Session, test_user: User):
+async def test_read_calculation(client: TestClient, test_token: str, db_session: Session, test_user: User):
     # Add a calculation
     calc = Calculation(
         id=uuid.uuid4(),
@@ -181,8 +185,8 @@ async def test_read_calculation(client: TestClient, test_token: str, test_db: Se
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow()
     )
-    test_db.add(calc)
-    test_db.commit()
+    db_session.add(calc)
+    db_session.commit()
     
     response = client.get(
         f"/calculations/{calc.id}",
@@ -206,7 +210,7 @@ async def test_read_calculation_not_found(client: TestClient, test_token: str):
     logger.info("Successfully tested read calculation not found")
 
 @pytest.mark.asyncio
-async def test_update_calculation(client: TestClient, test_token: str, test_db: Session, test_user: User):
+async def test_update_calculation(client: TestClient, test_token: str, db_session: Session, test_user: User):
     # Add a calculation
     calc = Calculation(
         id=uuid.uuid4(),
@@ -218,8 +222,8 @@ async def test_update_calculation(client: TestClient, test_token: str, test_db: 
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow()
     )
-    test_db.add(calc)
-    test_db.commit()
+    db_session.add(calc)
+    db_session.commit()
     
     response = client.put(
         f"/calculations/{calc.id}",
@@ -246,7 +250,7 @@ async def test_update_calculation_not_found(client: TestClient, test_token: str)
     logger.info("Successfully tested update calculation not found")
 
 @pytest.mark.asyncio
-async def test_delete_calculation(client: TestClient, test_token: str, test_db: Session, test_user: User):
+async def test_delete_calculation(client: TestClient, test_token: str, db_session: Session, test_user: User):
     # Add a calculation
     calc = Calculation(
         id=uuid.uuid4(),
@@ -258,8 +262,8 @@ async def test_delete_calculation(client: TestClient, test_token: str, test_db: 
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow()
     )
-    test_db.add(calc)
-    test_db.commit()
+    db_session.add(calc)
+    db_session.commit()
     
     response = client.delete(
         f"/calculations/{calc.id}",
@@ -268,7 +272,7 @@ async def test_delete_calculation(client: TestClient, test_token: str, test_db: 
     assert response.status_code == 204
     
     # Verify deletion
-    calc = test_db.query(Calculation).filter(Calculation.id == calc.id).first()
+    calc = db_session.query(Calculation).filter(Calculation.id == calc.id).first()
     assert calc is None
     logger.info("Successfully tested delete calculation")
 
