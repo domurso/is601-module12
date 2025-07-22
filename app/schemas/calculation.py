@@ -1,7 +1,8 @@
+# app/schemas/calculation.py
 from typing import Optional
 from uuid import UUID
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict, Field, validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from enum import Enum
 
 class CalculationType(str, Enum):
@@ -17,14 +18,15 @@ class CalculationCreate(BaseModel):
     b: float = Field(..., description="Second number for the calculation")
     type: CalculationType = Field(..., description="Type of calculation to perform")
 
-    @validator("b")
-    def prevent_zero_divisor(cls, v, values):
+    @field_validator("b")
+    def prevent_zero_divisor(cls, v, info):
         """Ensure b is not zero when type is divide"""
-        if "type" in values and values["type"] == CalculationType.DIVIDE and v == 0:
+        if info.data.get("type") == CalculationType.DIVIDE and v == 0:
             raise ValueError("Cannot divide by zero")
         return v
 
     model_config = ConfigDict(
+        from_attributes=True,
         json_schema_extra={
             "example": {
                 "a": 10.0,

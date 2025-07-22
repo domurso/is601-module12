@@ -16,6 +16,7 @@ from app.models.user import User
 from app.models.calculations import Calculation
 from app.auth.dependencies import get_current_active_user, UserResponse
 from app.database import SessionLocal
+from app.schemas.calculation import CalculationCreate, CalculationRead, CalculationType
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -71,32 +72,6 @@ class Token(BaseModel):
     access_token: str = Field(..., description="JWT access token")
     token_type: str = Field(..., description="Token type, e.g., bearer")
     user: UserResponse = Field(..., description="User details")
-
-# Pydantic schemas for calculation
-class CalculationCreate(BaseModel):
-    a: float = Field(..., description="The first number")
-    b: float = Field(..., description="The second number")
-    type: str = Field(..., description="Operation type: add, subtract, multiply, divide")
-
-    @field_validator('type')
-    def validate_type(cls, value):
-        valid_types = ['add', 'subtract', 'multiply', 'divide']
-        if value not in valid_types:
-            raise ValueError(f"Type must be one of {valid_types}")
-        return value
-
-class CalculationRead(BaseModel):
-    id: uuid.UUID
-    user_id: uuid.UUID
-    a: float
-    b: float
-    type: str
-    result: Optional[float]
-    created_at: datetime
-    updated_at: datetime
-
-    class Config:
-        from_attributes = True  # Updated for SQLAlchemy 2.0 compatibility
 
 # Custom Exception Handlers
 @app.exception_handler(HTTPException)
@@ -340,7 +315,7 @@ async def edit_calculation(
     
     calculation.a = calc_data.a
     calculation.b = calc_data.b
-    calculation.type = calc_data.type
+    calculation.type = calc_data.type.value
     try:
         calculation.perform_calculation()
         db.commit()
@@ -378,7 +353,7 @@ async def add_calculation(
             user_id=current_user.id,
             a=calc_data.a,
             b=calc_data.b,
-            calc_type=calc_data.type
+            calc_type=calc_data.type.value
         )
         db.commit()
         db.refresh(calculation)
